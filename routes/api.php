@@ -8,14 +8,15 @@ use Illuminate\Support\Facades\Route;
 // })->middleware('auth:sanctum');
 // ->middleware('throttle:forgot-password');
 
-Route::post('/register', [AuthController::class, 'register']);
-Route::post('/login', [AuthController::class, 'login']);
+Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:register');
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
+// Route::post('/login', [AuthController::class, 'login']);
 
-Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
-Route::post('/verify-otp', [AuthController::class, 'verifyResetOtp']);
-Route::post('/reset-password', [AuthController::class, 'resetPassword']);
+Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:password-reset');
+Route::post('/verify-otp', [AuthController::class, 'verifyResetOtp'])->middleware('throttle:otp');
+Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:password-reset');
 
-Route::group(['middleware' => 'jwt.auth'], function () {
+Route::middleware(['jwt.auth', 'throttle:api'])->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/refresh', [AuthController::class, 'refresh']);
     Route::post('/change-password', [AuthController::class, 'changePassword']);
