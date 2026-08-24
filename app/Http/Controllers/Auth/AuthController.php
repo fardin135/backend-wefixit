@@ -9,7 +9,6 @@ use App\Models\PasswordResetOtp;
 use App\Models\Role;
 use App\Models\User;
 use App\Traits\APIResponses;
-use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -175,12 +174,11 @@ class AuthController extends Controller
         }
     }
 
-    public function updatePassword(Request $request)
+    public function verifyResetOtp(Request $request)
     {
         $request->validate([
             'email' => ['required', 'email'],
             'otp' => ['required', 'digits:6'],
-            'password' => ['required', 'string', 'confirmed', 'min:8'],
         ]);
 
         try {
@@ -188,49 +186,113 @@ class AuthController extends Controller
 
             $result = DB::transaction(function () use ($email, $request) {
 
-                // Lock the OTP record to prevent concurrent verification.
                 $otpRecord = PasswordResetOtp::where('email', $email)
                     ->whereNull('used_at')
+                    ->whereNull('verified_at')
+                    ->where('expires_at', '>', now())
                     ->latest('created_at')
                     ->lockForUpdate()
                     ->first();
 
                 if (!$otpRecord) {
                     return [
-                        'success' => false,
-                        'message' => 'Invalid or expired password reset code',
-                        'status' => 400,
+                        'status' => 'error',
+                        'message' => 'Invalid or expired password reset code.',
+                        'status_code' => 400,
                     ];
                 }
 
-                // Prevent excessive attempts against the same OTP.
                 if ($otpRecord->attempts >= 5) {
                     return [
-                        'success' => false,
+                        'status' => 'error',
                         'message' => 'Too many invalid attempts. Please request a new code.',
-                        'status' => 429,
+                        'status_code' => 429,
                     ];
                 }
 
-                // Check OTP expiration.
-                if ($otpRecord->expires_at->isPast()) {
-                    return [
-                        'success' => false,
-                        'message' => 'Password reset code has expired. Please request a new code.',
-                        'status' => 400,
-                    ];
-                }
-
-                // Verify the OTP.
                 if (!Hash::check($request->otp, $otpRecord->otp_hash)) {
 
-                    // This update will now be committed.
                     $otpRecord->increment('attempts');
 
                     return [
-                        'success' => false,
-                        'message' => "Invalid or expired password reset code",
-                        'status' => 400,
+                        'status' => 'error',
+                        'message' => 'Invalid or expired password reset code.',
+                        'status_code' => 400,
+                    ];
+                }
+
+                $resetToken = bin2hex(random_bytes(32));
+
+                $otpRecord->update([
+                    'verified_at' => now(),
+                    'reset_token_hash' => hash('sha256', $resetToken),
+                    'reset_token_expires_at' => now()->addMinutes(10),
+                ]);
+
+                return [
+                    'status' => 'success',
+                    'message' => 'OTP verified successfully.',
+                    'status_code' => 200,
+                    'reset_token' => $resetToken,
+                ];
+            });
+
+            if ($result['status'] === 'error') {
+                return $this->error(
+                    $result['message'],
+                    null,
+                    $result['status_code']
+                );
+            }
+
+            return $this->success(
+                $result['message'],
+                [
+                    'reset_token' => $result['reset_token'],
+                    'expires_in' => 600,
+                ],
+                $result['status_code']
+            );
+
+        } catch (Throwable $e) {
+
+            Log::error('Password reset OTP verification failed', [
+                'exception' => $e,
+            ]);
+
+            return $this->serverError(
+                'Something went wrong. Please try again later.'
+            );
+        }
+    }
+
+    public function resetPassword(Request $request)
+    {
+        $request->validate([
+            'reset_token' => ['required', 'string', 'size:64'],
+            'password' => ['required', 'string', 'confirmed', 'min:8'],
+        ]);
+
+        try {
+            $tokenHash = hash('sha256', $request->reset_token);
+
+            $result = DB::transaction(function () use ($tokenHash, $request) {
+
+                $otpRecord = PasswordResetOtp::where(
+                    'reset_token_hash',
+                    $tokenHash
+                )
+                    ->whereNotNull('verified_at')
+                    ->whereNull('used_at')
+                    ->where('reset_token_expires_at', '>', now())
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$otpRecord) {
+                    return [
+                        'status' => 'error',
+                        'message' => 'Invalid or expired password reset token.',
+                        'status_code' => 400,
                     ];
                 }
 
@@ -238,40 +300,41 @@ class AuthController extends Controller
 
                 if (!$user) {
                     return [
-                        'success' => false,
-                        'message' => 'Invalid password reset request',
-                        'status' => 400,
+                        'status' => 'error',
+                        'message' => 'Invalid password reset request.',
+                        'status_code' => 400,
                     ];
                 }
 
-                // Update the password.
                 $user->update([
                     'password' => Hash::make($request->password),
                 ]);
 
-                // Mark the OTP as used.
                 $otpRecord->update([
                     'used_at' => now(),
+                    'reset_token_hash' => null,
+                    'reset_token_expires_at' => null,
                 ]);
 
                 return [
-                    'success' => true,
-                    'message' => 'Password successfully reset',
-                    'status' => 200,
+                    'status' => 'success',
+                    'message' => 'Password successfully reset.',
+                    'status_code' => 200,
                 ];
             });
 
-            if (!$result['success']) {
+            if ($result['status'] === 'error') {
                 return $this->error(
                     $result['message'],
-                    $result['status']
+                    null,
+                    $result['status_code']
                 );
             }
 
             return $this->success(
                 $result['message'],
-                [],
-                200
+                null,
+                $result['status_code']
             );
 
         } catch (Throwable $e) {
@@ -280,13 +343,12 @@ class AuthController extends Controller
                 'exception' => $e,
             ]);
 
-            return $this->error(
-                'Something went wrong. Please try again later.',
-                500
+            return $this->serverError(
+                'Something went wrong. Please try again later.'
             );
         }
     }
-
+    
     public function changePassword(Request $request)
     {
         $request->validate([
