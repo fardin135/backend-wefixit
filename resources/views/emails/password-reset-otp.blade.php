@@ -1,19 +1,14 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Password Reset</title>
-</head>
+@extends('emails.layout')
 
-<body>
-    <h2>Password Reset Request</h2>
+@section('title', 'Password Reset OTP')
 
-    <p>Your password reset OTP is:</p>
-
-    <h1>{{ $otp }}</h1>
-
-    <p>This OTP will expire in 5 minutes.</p>
-
-    <p>If you did not request a password reset, you can safely ignore this email.</p>
-</body>
-</html>
+@section('content')
+    <h1>Password Reset Request</h1>
+    <p>We received a request to reset your Wefixit account password. Enter the following code to proceed:</p>
+    
+    <div class="otp-box">
+        <p class="otp-code">{{ $otp }}</p>
+    </div>
+    
+    <p>This code will expire in 5 minutes. If you did not request a password reset, you can safely ignore this email.</p>
+@endsection
