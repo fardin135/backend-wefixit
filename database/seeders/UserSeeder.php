@@ -20,7 +20,9 @@ class UserSeeder extends Seeder
         $admin = User::firstOrCreate(
             ['email' => 'admin@gmail.com'],
             [
-                'name' => 'admin',
+                'first_name' => 'Super',
+                'last_name' => 'Admin',
+                'phone' => '01700000001',
                 'password' => Hash::make('12345678'),
             ]
         );
@@ -32,7 +34,9 @@ class UserSeeder extends Seeder
         $user = User::firstOrCreate(
             ['email' => 'user@gmail.com'],
             [
-                'name' => 'user',
+                'first_name' => 'Normal',
+                'last_name' => 'User',
+                'phone' => '01700000002',
                 'password' => Hash::make('12345678'),
             ]
         );

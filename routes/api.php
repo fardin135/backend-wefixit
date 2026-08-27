@@ -9,6 +9,8 @@ use Illuminate\Support\Facades\Route;
 // ->middleware('throttle:forgot-password');
 
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:register');
+Route::post('/verify-registration-otp', [AuthController::class, 'verifyRegistrationOtp'])->middleware('throttle:otp');
+Route::post('/resend-registration-otp', [AuthController::class, 'resendRegistrationOtp'])->middleware('throttle:otp');
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
 // Route::post('/login', [AuthController::class, 'login']);
 

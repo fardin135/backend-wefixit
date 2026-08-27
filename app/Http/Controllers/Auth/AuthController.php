@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\AuthRequest;
 use App\Jobs\SendPasswordResetOtp;
+use App\Jobs\SendRegistrationOtp;
 use App\Models\PasswordResetOtp;
+use App\Models\RegistrationOtp;
 use App\Models\Role;
 use App\Models\User;
 use App\Traits\APIResponses;
@@ -47,9 +49,11 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255',
+            'firstName' => 'required|string|min:2|max:255',
+            'lastName' => 'required|string|min:2|max:255',
+            'phone' => 'required|string|min:10|max:20',
             'email' => 'required|string|email|max:255|unique:users,email',
-            'password' => 'required|string|min:6|max:255|confirmed|regex:/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/',
+            'password' => 'required|string|min:6|max:255',
         ]);
 
         if ($validator->fails()) {
@@ -60,7 +64,9 @@ class AuthController extends Controller
             $user = DB::transaction(function () use ($request) {
 
                 $user = User::create([
-                    'name' => $request->name,
+                    'first_name' => $request->firstName,
+                    'last_name' => $request->lastName,
+                    'phone' => $request->phone,
                     'email' => $request->email,
                     'password' => Hash::make($request->password),
                 ]);
@@ -69,12 +75,21 @@ class AuthController extends Controller
 
                 $user->assignRole($customerRole);
 
+                // Generate OTP
+                $otp = (string) random_int(100000, 999999);
+
+                RegistrationOtp::create([
+                    'email' => $request->email,
+                    'otp_hash' => Hash::make($otp),
+                    'expires_at' => now()->addMinutes(5),
+                ]);
+
+                SendRegistrationOtp::dispatch($request->email, $otp)->onQueue('high');
+
                 return $user;
             });
 
-            $token = $this->guard()->login($user);
-
-            return $this->respondWithToken($token);
+            return $this->success('Registration successful. Please verify your OTP.', null, 201);
 
         } catch (Throwable $e) {
             report($e);
@@ -83,15 +98,95 @@ class AuthController extends Controller
         }
     }
 
+    public function verifyRegistrationOtp(Request $request)
+    {
+        $request->validate([
+            'email' => ['required', 'email'],
+            'otp' => ['required', 'digits:6'],
+        ]);
+
+        try {
+            $email = strtolower(trim($request->email));
+
+            $result = DB::transaction(function () use ($email, $request) {
+                $otpRecord = RegistrationOtp::where('email', $email)
+                    ->whereNull('verified_at')
+                    ->where('expires_at', '>', now())
+                    ->latest('created_at')
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$otpRecord) {
+                    return ['status' => 'error', 'message' => 'Invalid or expired OTP.', 'status_code' => 400];
+                }
+
+                if ($otpRecord->attempts >= 5) {
+                    return ['status' => 'error', 'message' => 'Too many attempts. Request a new OTP.', 'status_code' => 429];
+                }
+
+                if (!Hash::check($request->otp, $otpRecord->otp_hash)) {
+                    $otpRecord->increment('attempts');
+                    return ['status' => 'error', 'message' => 'Invalid OTP.', 'status_code' => 400];
+                }
+
+                $otpRecord->update(['verified_at' => now()]);
+
+                $user = User::where('email', $email)->first();
+                $user->update(['email_verified_at' => now()]);
+
+                return ['status' => 'success', 'user' => $user];
+            });
+
+            if ($result['status'] === 'error') {
+                return $this->error($result['message'], null, $result['status_code']);
+            }
+
+            return $this->success('Email verified successfully. Please login.', null, 200);
+
+        } catch (Throwable $e) {
+            return $this->serverError('Verification failed', $e->getMessage());
+        }
+    }
+
+    public function resendRegistrationOtp(Request $request)
+    {
+        $request->validate(['email' => ['required', 'email']]);
+
+        try {
+            $email = strtolower(trim($request->email));
+            $user = User::where('email', $email)->first();
+
+            if (!$user || $user->email_verified_at) {
+                return $this->error('User not found or already verified', null, 400);
+            }
+
+            $otp = (string) random_int(100000, 999999);
+            RegistrationOtp::create([
+                'email' => $email,
+                'otp_hash' => Hash::make($otp),
+                'expires_at' => now()->addMinutes(5),
+            ]);
+
+            SendRegistrationOtp::dispatch($email, $otp)->onQueue('high');
+
+            return $this->success('OTP resent successfully.');
+        } catch (Throwable $e) {
+            return $this->serverError('Failed to resend OTP', $e->getMessage());
+        }
+    }
+
     // rate limiting to be implemented
     public function login(AuthRequest $request)
     {
+        $credentials = $request->only('email', 'password');
+        
+        $user = $this->guard()->getProvider()->retrieveByCredentials($credentials);
 
-        // if ($request->input('mobile_number')) {
-        //     $token = $this->guard()->attempt($request->only('mobile_number', 'password'));
-        // } else {
-        $token = $this->guard()->attempt($request->only('email', 'password'));
-        // }
+        if ($user && !$user->email_verified_at) {
+            return $this->error('Please verify your email address first.', null, 403);
+        }
+
+        $token = $this->guard()->attempt($credentials);
 
         if ($token) {
             return $this->respondWithToken($token);
