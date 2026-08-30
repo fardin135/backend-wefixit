@@ -92,9 +92,8 @@ class AuthController extends Controller
             return $this->success('Registration successful. Please verify your OTP.', null, 201);
 
         } catch (Throwable $e) {
-            report($e);
-
-            return $this->serverError('Registration failed', $e->getMessage());
+            Log::error('Registration failed: ' . $e->getMessage(), ['exception' => $e]);
+            return $this->serverError('Registration failed', 'An unexpected error occurred. Please try again later.');
         }
     }
 
@@ -178,21 +177,26 @@ class AuthController extends Controller
     // rate limiting to be implemented
     public function login(AuthRequest $request)
     {
-        $credentials = $request->only('email', 'password');
-        
-        $user = $this->guard()->getProvider()->retrieveByCredentials($credentials);
+        try {
+            $credentials = $request->only('email', 'password');
+            
+            $user = $this->guard()->getProvider()->retrieveByCredentials($credentials);
 
-        if ($user && !$user->email_verified_at) {
-            return $this->error('Please verify your email address first.', null, 403);
+            if ($user && !$user->email_verified_at) {
+                return $this->error('Please verify your email address first.', null, 403);
+            }
+
+            $token = $this->guard()->attempt($credentials);
+
+            if ($token) {
+                return $this->respondWithToken($token);
+            }
+
+            return $this->unauthorized('Invalid credentials');
+        } catch (Throwable $e) {
+            Log::error('Login failed: ' . $e->getMessage(), ['exception' => $e]);
+            return $this->serverError('Login failed', 'An unexpected error occurred. Please try again later.');
         }
-
-        $token = $this->guard()->attempt($credentials);
-
-        if ($token) {
-            return $this->respondWithToken($token);
-        }
-
-        return $this->unauthorized('Invalid credentials');
     }
 
     public function me()
@@ -230,8 +234,8 @@ class AuthController extends Controller
 
             if (!$user) {
                 return response()->json([
-                    'message' => 'If an account exists for this email, a password reset code has been sent.',
-                ], 200);
+                    'message' => 'No account found with this email address.',
+                ], 404);
             }
 
             PasswordResetOtp::where('user_id', $user->id)
@@ -257,14 +261,15 @@ class AuthController extends Controller
                 ->onQueue('high');
 
             return response()->json([
-                'message' => 'If an account exists for this email, a password reset code has been sent.',
+                'message' => 'A password reset code has been sent to your email.',
             ], 200);
 
         } catch (Throwable $e) {
+            Log::error('Forgot password failed: ' . $e->getMessage(), ['exception' => $e]);
             return $this->error(
                 'Something went wrong',
                 500,
-                $e->getMessage()
+                'An unexpected error occurred. Please try again later.'
             );
         }
     }
