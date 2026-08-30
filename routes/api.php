@@ -15,7 +15,7 @@ Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:lo
 // Route::post('/login', [AuthController::class, 'login']);
 
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:password-reset');
-Route::post('/verify-otp', [AuthController::class, 'verifyResetOtp'])->middleware('throttle:otp');
+Route::post('/verify-reset-otp', [AuthController::class, 'verifyResetOtp'])->middleware('throttle:otp');
 Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:password-reset');
 
 Route::middleware(['jwt.auth', 'throttle:api'])->group(function () {
